@@ -85,93 +85,161 @@ class CrowdsaleFuzzer:
         print(wei / 10**18)
 
 
-
+    # TODO: automatically infer failures
     def gen_functions(self):
         """
         Generate function signatures for testing vectors
         """
         # TODO payable, nonReentrant
-        terminate = Function(self.fuzz_terminate, ["onlyOwner"], None)
-        setRate = Function(self.fuzz_setRate, ["onlyOwner"], ["rateAbove", "rateBelow"])
-        ownerAllocateTokens = Function(self.fuzz_ownerAllocateTokens, ["onlyOwner", "validDestination"] , ["exceedAllowance"])
-        ownerUnlockFunds = Function(self.fuzz_ownerUnlockFund, ["onlyOwner", "afterDeadline"], None)
-        fallback = Function(self.fuzz_fallback, ["whenNotPaused", "beforeDeadline", "saleNotClosed"])
+        terminate = Function(self.terminate, ["onlyOwner"], None)
+        setRate = Function(self.setRate, ["onlyOwner"], ["rateAbove", "rateBelow"])
+        ownerAllocateTokens = Function(self.ownerAllocateTokens, ["onlyOwner", "validDestination"], ["exceedAllowance"])
+        ownerUnlockFunds = Function(self.ownerUnlockFund, ["onlyOwner", "afterDeadline"], None)
+        fallback = Function(self.fallback, ["whenNotPaused", "beforeDeadline", "saleNotClosed"])
         arr = [terminate, setRate, ownerAllocateTokens, ownerUnlockFunds, fallback]
         return arr
 
-    def fuzz_onlyOwner(self, function_name, error_message):
-        user = self.RNG.choice(self.non_owner_users)
+    def onlyOwner(self, function_name, error_message, parameters):
+        # instantiate parameters locally
+        if not parameters:
+            parameters = {}
+
+        user = parameters.get("user", self.RNG.choice(self.non_owner_users))
+        # end parameter instantiation
+
         user_str = gen_user_str(user)
         s = "await " + function_name + "(" + user_str + ");"
         s = wrap_exception(s, error_message)
         return s
 
-    def fuzz_terminate(self, fail):
+    def terminate(self, fail, parameters=None):
         # can only fail if run as a non-owner
+        # instantiate parameters locally
+        if not parameters:
+            parameters = {}
+        if fail:
+            parameters["user"] = parameters.get("user", self.RNG.choice(self.non_owner_users))
+        else:
+            parameters["user"] = parameters.get("user", "owner")
+
+        user = parameters["user"]
+        # end parameter instantiation
+
         if not fail:
             # run as the owner
-            user_str = gen_user_str("owner")
+            user_str = gen_user_str(user)
             s = "await sale.terminate(" + user_str + ");\n"
             s += "let closed = await sale.saleClosed();\n"
             s += "assert(closed, 'sale should be closed after owner terminates it');"
             self.saleClosed = True
         else:
-            s = self.fuzz_onlyOwner("sale.terminate", "only the owner can terminate the crowd sale")
+            s = self.onlyOwner("sale.terminate", "only the owner can terminate the crowd sale", parameters)
         return s;
 
-    def fuzz_ownerUnlockFund(self, fail):
+    def ownerUnlockFund(self, fail, parameters=None):
         # can only fail if run as a non-owner, or before deadline
+        # instantiate parameters locally
+        if not parameters:
+            parameters = {}
+        if fail == "onlyOwner":
+            parameters["user"] = parameters.get("user", self.RNG.choice(self.non_owner_users))
+        else:
+            parameters["user"] = parameters.get("user", "owner")
+        if fail == "afterDeadline":
+            sys.exit("TODO afterDeadline")
+        elif not fail:
+            parameters["user"] = parameters.get("user", "owner")
+        else:
+            sys.exit("Missing case in ownerUnlockFund")
+
+        user = parameters["user"]
+        # end parameter instantiation
+
         if not fail:
             # run as the owner
-            user_str = gen_user_str("owner")
+            user_str = gen_user_str(user)
             s = "await sale.ownerUnlockFund(" + user_str + ");\n"
             s += "var goal_reached = await sale.fundingGoalReached();\n"
             s += "assert(goal_reached, 'fundingGoalReached should be false after calling, allowing users to withdraw');"
             self.saleClosed = True
         elif fail == "onlyOwner":
-            s = self.fuzz_onlyOwner("sale.ownerUnlockFund", "only the owner can unlock funds from the crowd sale")
+            s = self.onlyOwner("sale.ownerUnlockFund",
+                                    "only the owner can unlock funds from the crowd sale",
+                               parameters)
         elif fail == "afterDeadline":
             # TODO
             sys.exit("TODO afterDeadline")
         return s;
 
 
-    def fuzz_setRate(self, fail):
+    def setRate(self, fail, parameters=None):
+        # instantiate parameters locally
+        if not parameters:
+            parameters = {}
+        if fail == "onlyOwner":
+            parameters["user"] = parameters.get("user", self.RNG.choice(self.non_owner_users))
+        else:
+            parameters["user"] = parameters.get("user", "owner")
+        if fail == "rateAbove":
+            parameters["rate"] = parameters.get("rate", self.RNG.randint(self.high_rate + 1, BILLION))
+        elif fail == "rateBelow":
+            parameters["rate"] = parameters.get("rate", self.RNG.randint(0, self.low_rate - 1))
+        else:
+            self.RNG.randint(self.low_rate, self.high_rate)
+
+        user = parameters["user"]
+        rate = parameters["rate"]
+        user_str = gen_user_str(user)
+        # end parameter instantiation
+
         if not fail:
             # run as the owner
-            user_str = gen_user_str("owner")
-            rate = self.RNG.randint(self.low_rate, self.high_rate)
             s = "await sale.setRate(" + str(rate) + ", " + user_str + ");\n"
             s += "var currentRate = await sale.rate();\n"
             s += gen_assert_equal("currentRate", rate, "the rate should be set to the new value")
-
             self.rate = rate
         elif fail == "onlyOwner":
-            s = self.fuzz_onlyOwner("sale.setRate", "only the owner can set the rate")
+            s = self.onlyOwner("sale.setRate", "only the owner can set the rate")
         elif fail == "rateAbove" or fail == "rateBelow":
-
-            if fail == "rateAbove":
-                rate = self.RNG.randint(self.high_rate + 1, BILLION)
-            else:
-                rate = self.RNG.randint(0, self.low_rate - 1)
-            user_str = gen_user_str("owner")
             s = "await sale.setRate(" + str(rate) + ", " + user_str + ");\n"
             s = wrap_exception(s, "the new rate must be within the bounds")
         if fail:
             s += "var currentRate = await sale.rate();\n"
             s += gen_assert_equal("currentRate", self.rate, "the rate should not have changed")
-
         return s;
 
-    def fuzz_ownerAllocateTokens(self, fail):
+    def ownerAllocateTokens(self, fail, parameters=None):
         # TODO: refactor
         # TODO: fresh var generator
+        # instantiate parameters locally
+        if not parameters:
+            parameters = {}
+        if fail == "onlyOwner":
+            parameters["user"] = parameters.get("user", self.RNG.choice(self.non_owner_users))
+        else:
+            parameters["user"] = parameters.get("user", "owner")
+        if fail == "validDestination":
+            bad_users = ["sale.address", "0x0", "token.owner()"]
+            parameters["to_user"] = parameters.get("to_user", self.RNG.choice(bad_users))
+        else:
+            parameters["to_user"] = parameters.get("to_user", self.RNG.choice(self.all_users))
+        if fail == "exceedAllowance":
+            parameters["amount_mini_qsp"] = parameters.get("amount_mini_qsp",
+                                                           self.RNG.randint(self.token.crowdsale_allowance + 1,
+                                                                            self.token.crowdsale_allowance + BILLION))
+        else:
+            parameters["amount_mini_qsp"] = parameters.get("amount_mini_qsp",
+                                                           self.RNG.randint(0, self.token.crowdsale_allowance))
+        parameters["amount_wei"] = parameters.get("amount_wei", self.RNG.randint(0, CROWDSALE_CAP))
+
+        user = parameters["user"]
+        user_str = gen_user_str(user)
+        to_user = parameters["to_user"]
+        amount_mini_qsp = parameters["amount_mini_qsp"]
+        amount_wei = parameters["amount_wei"]
+        # end parameter instantiation
+
         if not fail:
-            # run as the owner
-            user_str = gen_user_str("owner")
-            to_user = self.RNG.choice(self.all_users)
-            amount_mini_qsp = str(self.RNG.randint(0, self.token.crowdsale_allowance))
-            amount_wei = str(self.RNG.randint(0, CROWDSALE_CAP))
             s = "await sale.ownerAllocateTokens(" + \
                 ", ".join([to_user, amount_wei, amount_mini_qsp, user_str]) + ");\n"
 
@@ -216,22 +284,14 @@ class CrowdsaleFuzzer:
             else:
                 s += "assert(!cap_reached, 'the funding cap has not been reached and should be false');\n"
         elif fail == "onlyOwner":
-            s = self.fuzz_onlyOwner("sale.ownerAllocateTokens", "only the owner can call ownerAllocateTokens")
+            s = self.onlyOwner("sale.ownerAllocateTokens",
+                                    "only the owner can call ownerAllocateTokens",
+                               parameters)
         elif fail == "validDestination":
-            bad_users = ["sale.address", "0x0", "token.owner()"]  # TODO: abstract this
-            user_str = gen_user_str("owner")
-            to_user = self.RNG.choice(bad_users)
-            amount_mini_qsp = str(self.RNG.randint(0, self.token.crowdsale_allowance))
-            amount_wei = str(self.RNG.randint(0, CROWDSALE_CAP))
             s = "await sale.ownerAllocateTokens(" + \
                 ", ".join([to_user, amount_wei, amount_mini_qsp, user_str]) + ");\n"
             s = wrap_exception(s, "the to-address is not valid for allocating tokens")
         elif fail == "exceedAllowance":
-            user_str = gen_user_str("owner")
-            to_user = self.RNG.choice(self.all_users)
-            amount_wei = str(self.RNG.randint(0, CROWDSALE_CAP))
-            amount_mini_qsp = str(self.RNG.randint(self.token.crowdsale_allowance + 1,
-                                                   self.token.crowdsale_allowance + BILLION))
             s = "await sale.ownerAllocateTokens(" + \
                 ", ".join([to_user, amount_wei, amount_mini_qsp, user_str]) + ");\n"
             s = wrap_exception(s, "the amount of mini-QSP exceeds the crowdsale's allowance")
@@ -242,8 +302,8 @@ class CrowdsaleFuzzer:
                                   "the crowdsale allowance should not have changed")
         return s;
 
-    def fuzz_fallback(self, fail):
-        # TODO:
+    def fallback(self, fail, parameters=None):
+        # TODO: cases
         # case where the contribution is less than the minimum
         # case where the crowdsale is closed
         # case where the crowdsale is after the deadline
@@ -251,13 +311,25 @@ class CrowdsaleFuzzer:
         # case where the amount exceeds cap
         # case where the amount exceeds goal but not cap
 
-        if not fail:
-            user = self.RNG.choice(self.all_users)
-            wei = self.RNG.randint(0, ETHER)  # TODO abstract
-            user_str = gen_user_str(user, wei)
-            #       await sale.sendTransaction({from: user2,  value: web3.toWei(amountEther, "ether")});
-            s = "await sale.sendTransaction(" + user_str + ");\n"
+        # instantiate parameters locally
+        # PARAMETERS: user, wei
+        # fail: belowMinContribution
+        if not parameters:
+            parameters = {}
+        parameters["user"] = parameters.get("user", self.RNG.choice(self.all_users))
+        if fail == "belowMinContribution":
+            parameters["wei"] = parameters.get("wei", self.RNG.randint(0, int(0.1*ETHER - 1)))
+        else:
+            parameters["wei"] = parameters.get("wei", self.RNG.randint(int(0.1 * ETHER), ETHER))
 
+        user = parameters["user"]
+        wei = parameters["wei"]
+        user_str = gen_user_str(user, wei)
+        # end parameter instantiation
+
+
+        if not fail:
+            s = "await sale.sendTransaction(" + user_str + ");\n"
             # assert that the balance of the user in token is increased (qsp = wei * rate)
             # assert that the balance of the user in sale is increased (wei)
             # assert that the amountRaised field has increased

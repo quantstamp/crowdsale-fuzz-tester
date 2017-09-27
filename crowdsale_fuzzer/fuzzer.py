@@ -39,8 +39,8 @@ BOOLS = [True, False]
 def seed_random():
     global RANDOM_SEED
     global RNG
-    # RANDOM_SEED = 123
-    RANDOM_SEED = random.randrange(sys.maxsize)
+    RANDOM_SEED = 123
+    #RANDOM_SEED = random.randrange(sys.maxsize)
     RNG = random.Random(RANDOM_SEED)
 
 
@@ -50,7 +50,7 @@ def gen_test(out, ops=2):
     token = Token(INITIAL_SUPPLY, INITIAL_CROWDSALE_ALLOWANCE, INITIAL_ADMIN_ALLOWANCE)
     crowdsale = CrowdsaleFuzzer(RNG, env, token, USERS, *CROWDSALE_PARAMETERS)
     functions = crowdsale.functions
-    functions = [i for i in functions if i.function.__name__ == "fuzz_fallback"]
+    functions = [i for i in functions if i.function.__name__ == "fuzz_terminate"]
     print(functions)
 
     out.write("it('should pass the fuzz test', async function(){\n")
@@ -71,6 +71,31 @@ def gen_test(out, ops=2):
         count += 1
     out.write("    });\n")
 
+def gen_predefined_test(out, ops):
+    env = SolidityEnvironment()
+    token = Token(INITIAL_SUPPLY, INITIAL_CROWDSALE_ALLOWANCE, INITIAL_ADMIN_ALLOWANCE)
+    c = CrowdsaleFuzzer(RNG, env, token, USERS, *CROWDSALE_PARAMETERS)
+    
+    ops = [
+        c.terminate(fail="onlyOwner"),
+        c.terminate(fail="onlyOwner"),
+        c.terminate(fail=None)
+    ]
+
+    out.write("it('should pass the fuzz test', async function(){\n")
+    # TODO: clean this, need this line to initiate the crowdsale
+    out.write("        await token.setCrowdsale(sale.address, 0);\n")
+    count = 0
+    for s in ops:
+        if not s:
+            continue
+
+        arr = s.split("\n")
+        for line in arr:
+            out.write("        " + line + "\n")
+        count += 1
+    out.write("    });\n")
+
 
 def main():
     seed_random()
@@ -80,7 +105,8 @@ def main():
     with open(out_file, 'w') as out:
         gen_header(out)
         gen_test_contract_header(out, RANDOM_SEED)
-        gen_test(out, ops=2)
+        #gen_test(out, ops=2)
+        gen_predefined_test(out, [])
         gen_test_contract_footer(out)
     print(out_file)
 
