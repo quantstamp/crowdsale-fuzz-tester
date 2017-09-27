@@ -6,7 +6,8 @@ from solidity_entities.environment import SolidityEnvironment
 from solidity_entities.function import Function
 from solidity_entities.token import Token
 from test_writer import wrap_exception, gen_assert_equal, gen_big_int, gen_log, to_number, \
-    wrap_token_balance_checks, wrap_sale_balance_checks, wrap_allowance_checks
+    wrap_token_balance_checks, wrap_sale_balance_checks, wrap_allowance_checks, balance_assertion_check, \
+    goal_and_cap_assertion_checks, wrap_amount_raised
 
 ETHER = 10 ** 18
 CROWDSALE_CAP = 100000 * ETHER
@@ -30,6 +31,7 @@ class CrowdsaleFuzzer:
                  users,
                  owner,
                  beneficiary,
+                 token_admin,
                  fundingGoalInEthers,
                  fundingCapInEthers,
                  minimumContributionInWei,
@@ -38,6 +40,7 @@ class CrowdsaleFuzzer:
                  rateQspToEther):
         self.RNG = RNG
         self.env = solidity_environment
+        self.env.current_time = start
         self.token = token
 
         assert isinstance(self.RNG, random.Random)
@@ -47,10 +50,13 @@ class CrowdsaleFuzzer:
         self.all_users = users
         self.owner = owner
         self.beneficiary = beneficiary
-        self.basic_users = [i for i in self.all_users if i not in [self.owner, self.beneficiary]]
+        self.token_admin = token_admin
+        self.basic_users = [i for i in self.all_users if i not in [self.owner, self.beneficiary, self.token_admin]]
         self.non_owner_users = [i for i in self.all_users if i != self.owner]
-        self.fundingGoal = fundingGoalInEthers
-        self.fundingCap = fundingCapInEthers
+        self.bad_destinations = ["sale.address", "0x0", "token.owner()", self.token_admin, "token.address"]
+
+        self.fundingGoal = fundingGoalInEthers * ETHER
+        self.fundingCap = fundingCapInEthers * ETHER
         self.minContribution = minimumContributionInWei
         self.startTime = start
         self.endTime = start + durationInMinutes * 60
@@ -58,32 +64,34 @@ class CrowdsaleFuzzer:
 
         # other state variables
         self.saleClosed = False
+        self.paused = False
         self.amountRaised = 0
         self.refundAmount = 0
         self.balanceOf = {}  # how much each donor has contributed to the crowdsale
         self.low_rate = 5000
         self.high_rate = 10000
-        self.goal_reached = False
-        self.cap_reached = False
+        self.goal_reached = (self.amountRaised >= self.fundingGoal)
+        self.cap_reached = (self.amountRaised >= self.fundingCap)
         self.functions = self.gen_functions()
 
 
     def update_state_with_purchase(self, user, wei, mini_qsp):
         # update amount raised, the allowance of the crowdsale, and the balance of user in token and sale
+        # if mini_qsp is None, then mini_qsp = wei * rate
         wei = int(wei)
-        mini_qsp = int(mini_qsp)
+        if mini_qsp:
+            mini_qsp = int(mini_qsp)
+        else:
+            mini_qsp = wei * self.rate
         self.amountRaised += wei
         self.token.crowdsale_allowance -= mini_qsp
         self.token.balances[user] = self.token.balances.get(user, 0) + mini_qsp
         self.balanceOf[user] = self.balanceOf.get(user, 0) + wei
-
         # update goal and cap if exceeded
-        if self.amountRaised > self.goal_reached:
+        if self.amountRaised > self.fundingGoal:
             self.goal_reached = True
         if self.amountRaised > self.fundingCap:
             self.cap_reached = True
-        print(wei / 10**18)
-
 
     # TODO: automatically infer failures
     def gen_functions(self):
@@ -98,6 +106,16 @@ class CrowdsaleFuzzer:
         fallback = Function(self.fallback, ["whenNotPaused", "beforeDeadline", "saleNotClosed"])
         arr = [terminate, setRate, ownerAllocateTokens, ownerUnlockFunds, fallback]
         return arr
+
+    def changeTime(self, time):
+        s = "await sale.changeTime (" + str(time) + ", {from: owner});"
+        self.env.current_time = time
+        return s
+
+    def checkTime(self):
+        s = "var currTime = await sale._now();\n"
+        s += gen_log("'Time: ' + currTime.toNumber()")
+        return s
 
     def onlyOwner(self, function_name, error_message, parameters):
         # instantiate parameters locally
@@ -129,7 +147,7 @@ class CrowdsaleFuzzer:
             # run as the owner
             user_str = gen_user_str(user)
             s = "await sale.terminate(" + user_str + ");\n"
-            s += "let closed = await sale.saleClosed();\n"
+            s += "var closed = await sale.saleClosed();\n"
             s += "assert(closed, 'sale should be closed after owner terminates it');"
             self.saleClosed = True
         else:
@@ -185,7 +203,7 @@ class CrowdsaleFuzzer:
         elif fail == "rateBelow":
             parameters["rate"] = parameters.get("rate", self.RNG.randint(0, self.low_rate - 1))
         else:
-            self.RNG.randint(self.low_rate, self.high_rate)
+            parameters["rate"] = parameters.get("rate", self.RNG.randint(self.low_rate, self.high_rate))
 
         user = parameters["user"]
         rate = parameters["rate"]
@@ -219,10 +237,9 @@ class CrowdsaleFuzzer:
         else:
             parameters["user"] = parameters.get("user", "owner")
         if fail == "validDestination":
-            bad_users = ["sale.address", "0x0", "token.owner()"]
-            parameters["to_user"] = parameters.get("to_user", self.RNG.choice(bad_users))
+            parameters["to_user"] = parameters.get("to_user", self.RNG.choice(self.bad_destinations))
         else:
-            parameters["to_user"] = parameters.get("to_user", self.RNG.choice(self.all_users))
+            parameters["to_user"] = parameters.get("to_user", self.RNG.choice(self.non_owner_users))
         if fail == "exceedAllowance":
             parameters["amount_mini_qsp"] = parameters.get("amount_mini_qsp",
                                                            self.RNG.randint(self.token.crowdsale_allowance + 1,
@@ -235,54 +252,44 @@ class CrowdsaleFuzzer:
         user = parameters["user"]
         user_str = gen_user_str(user)
         to_user = parameters["to_user"]
-        amount_mini_qsp = parameters["amount_mini_qsp"]
-        amount_wei = parameters["amount_wei"]
+        amount_mini_qsp = str(parameters["amount_mini_qsp"])
+        amount_wei = str(parameters["amount_wei"])
         # end parameter instantiation
 
         if not fail:
             s = "await sale.ownerAllocateTokens(" + \
                 ", ".join([to_user, amount_wei, amount_mini_qsp, user_str]) + ");\n"
-
             # assert that token.balances[to_user] increases by amount_mini_qsp
             vid = "token_balance_" + to_user
             s = wrap_token_balance_checks(s, to_user, vid)
-            l = vid + "_before.add(" + gen_big_int(amount_mini_qsp) + ")"
-            r = vid + "_after"
-            s += gen_assert_equal(to_number(l), to_number(r),
-                                  "the token balance of the to_user should increase after ownerAllocateTokens")
+            s += balance_assertion_check(vid, ".add(" + gen_big_int(amount_mini_qsp) + ")",
+                                         "the token balance of the to_user should increase after ownerAllocateTokens")
 
             # assert that the sale.balanceOf[to_user] increases by amount_wei
             vid = "sale_balance_" + to_user
             s = wrap_sale_balance_checks(s, to_user, vid)
-            l = vid + "_before.add(" + gen_big_int(amount_wei) + ")"
-            r = vid + "_after"
-            s += gen_assert_equal(to_number(l), to_number(r),
-                                  "the sale balance of the to_user should increase after ownerAllocateTokens")
+            s += balance_assertion_check(vid, ".add(" + gen_big_int(amount_wei) + ")",
+                                         "the sale balance of the to_user should increase after ownerAllocateTokens")
 
             # assert that the allowance of crowdsale decreases by amount_mini_qsp
             vid = "crowdsale_allowance"
             s = wrap_allowance_checks(s, "sale.address", vid)
-            l = vid + "_before.minus(" + gen_big_int(amount_mini_qsp) + ")"
-            r = vid + "_after"
-            s += gen_assert_equal(to_number(l), to_number(r),
-                                  "the allowance of the crowdsale should decrease by amount_mini_qsp")
+            s += balance_assertion_check(vid, ".minus(" + gen_big_int(amount_mini_qsp) + ")",
+                                         "the allowance of the crowdsale should decrease by amount_mini_qsp")
 
-            # update the state of crowdsale.py
+            # assert that the amountRaised field has increased
+            vid = "amount_raised"
+            s = wrap_amount_raised(s, vid)
+            s += balance_assertion_check(vid, ".add(" + gen_big_int(amount_wei) + ")",
+                                         "the amountRaised of the crowdsale should increase by amountWei in ownerAllocateTokens")
+
+            # update the state of crowdsale
             self.update_state_with_purchase(to_user, amount_wei, amount_mini_qsp)
 
-            # assert that the goalReached field has changed if necessary
-            s += "var goal_reached = await sale.fundingGoalReached();\n"
-            if self.goal_reached:
-                s += "assert(goal_reached, 'the funding goal has been reached and should be true');\n"
-            else:
-                s += "assert(!goal_reached, 'the funding goal has not been reached and should be false');\n"
+            # assert that the goalReached and capReached fields have changed if necessary
+            s += goal_and_cap_assertion_checks(self.goal_reached, self.cap_reached)
 
-            # assert that the capReached field has changed if necessary
-            s += "var cap_reached = await sale.fundingCapReached();\n"
-            if self.cap_reached:
-                s += "assert(cap_reached, 'the funding cap has been reached and should be true');\n"
-            else:
-                s += "assert(!cap_reached, 'the funding cap has not been reached and should be false');\n"
+
         elif fail == "onlyOwner":
             s = self.onlyOwner("sale.ownerAllocateTokens",
                                     "only the owner can call ownerAllocateTokens",
@@ -303,20 +310,14 @@ class CrowdsaleFuzzer:
         return s;
 
     def fallback(self, fail, parameters=None):
-        # TODO: cases
-        # case where the contribution is less than the minimum
-        # case where the crowdsale is closed
-        # case where the crowdsale is after the deadline
-        # case where the crowdsale is paused
-        # case where the amount exceeds cap
-        # case where the amount exceeds goal but not cap
-
-        # instantiate parameters locally
         # PARAMETERS: user, wei
-        # fail: belowMinContribution
+        # fail: belowMinContribution, validDestination
         if not parameters:
             parameters = {}
-        parameters["user"] = parameters.get("user", self.RNG.choice(self.all_users))
+        if fail == "validDestination":
+            parameters["user"] = parameters.get("user", self.RNG.choice(self.bad_destinations))
+        else:
+            parameters["user"] = parameters.get("user", self.RNG.choice(self.basic_users))
         if fail == "belowMinContribution":
             parameters["wei"] = parameters.get("wei", self.RNG.randint(0, int(0.1*ETHER - 1)))
         else:
@@ -327,17 +328,53 @@ class CrowdsaleFuzzer:
         user_str = gen_user_str(user, wei)
         # end parameter instantiation
 
+        s = "await sale.sendTransaction(" + user_str + ");\n"
 
-        if not fail:
-            s = "await sale.sendTransaction(" + user_str + ");\n"
+        payable_disallowed = (self.cap_reached
+              or self.saleClosed
+              or self.paused
+              or self.env.current_time < self.startTime
+              or self.env.current_time > self.endTime)
+        if not fail and not payable_disallowed:
             # assert that the balance of the user in token is increased (qsp = wei * rate)
-            # assert that the balance of the user in sale is increased (wei)
-            # assert that the amountRaised field has increased
-            # assert that the goalReached field has changed if necessary
-            # assert that the capReached field has changed if necessary
-            print("TODO payable")
+            vid = "token_balance_" + user
+            s = wrap_token_balance_checks(s, user, vid)
+            s += balance_assertion_check(vid, ".add(" + gen_big_int(wei * self.rate) + ")",
+                                         "the token balance of the user should increase after contributing")
 
+            # assert that the balance of the user in sale is increased (wei)
+            vid = "sale_balance_" + user
+            s = wrap_sale_balance_checks(s, user, vid)
+            s += balance_assertion_check(vid, ".add(" + gen_big_int(wei) + ")",
+                                         "the sale balance of the user should increase after contributing")
+
+            # assert that the amountRaised field has increased
+            vid = "amount_raised"
+            s = wrap_amount_raised(s, vid)
+            s += balance_assertion_check(vid, ".add(" + gen_big_int(wei) + ")",
+                                         "the amountRaised of the crowdsale should increase by wei")
+
+            # assert that the allowance of the crowdsale has decreased
+            vid = "crowdsale_allowance"
+            s = wrap_allowance_checks(s, "sale.address", vid)
+            s += balance_assertion_check(vid, ".minus(" + gen_big_int(wei * self.rate) + ")",
+                                         "the allowance of the crowdsale should decrease by wei * rate")
+
+            # update the state of crowdsale
+            self.update_state_with_purchase(user, wei, None)
+
+            # assert that the goalReached and capReached fields have changed if necessary
+            s += goal_and_cap_assertion_checks(self.goal_reached, self.cap_reached)
+
+
+        elif fail == "belowMinContribution":
+            s = wrap_exception(s, "cannot contribute below the minimum")
+        elif fail == "validDestination":
+            s = wrap_exception(s, "the user is not allowed to purchase tokens")
+        elif payable_disallowed:
+            s = wrap_exception(s, "cannot contribute after the sale is beforeStart/closed/paused/finished")
         else:
             print("TODO finish payable")
             s = ""
         return s;
+

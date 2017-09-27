@@ -5,6 +5,7 @@ import sys
 
 # TODO: change start variable somehow
 # beneficiary, goal, cap, minContrib, start, duration, rate
+import test_writer
 from solidity_entities.crowdsale import CrowdsaleFuzzer
 from solidity_entities.environment import SolidityEnvironment
 from solidity_entities.function import Function
@@ -14,8 +15,11 @@ from test_writer import gen_header, gen_test_contract_header, gen_test_contract_
 
 # ==================== Change these parameters as needed. =============================
 
-CROWDSALE_PARAMETERS = ["owner", "beneficiary", 10, 20, 1, 0, 123123123123, 5000]
-USERS = ["owner", "beneficiary", "user2", "user3"]
+START_TIME = 1323244
+DURATION_IN_MINUTES = 2
+CROWDSALE_PARAMETERS = ["owner", "beneficiary", "token_admin", 10, 20, 1, START_TIME, DURATION_IN_MINUTES, 5000]
+CROWDSALE_CONTRACT_PARAMETERS = ["beneficiary", 10, 20, 1, START_TIME, DURATION_IN_MINUTES, 5000]
+USERS = ["owner", "beneficiary", "token_admin", "user3", "user4"]
 
 # TOKEN_PARAMETERS
 DECIMALS = 18
@@ -51,7 +55,6 @@ def gen_test(out, ops=2):
     crowdsale = CrowdsaleFuzzer(RNG, env, token, USERS, *CROWDSALE_PARAMETERS)
     functions = crowdsale.functions
     functions = [i for i in functions if i.function.__name__ == "fuzz_terminate"]
-    print(functions)
 
     out.write("it('should pass the fuzz test', async function(){\n")
     # TODO: clean this, need this line to initiate the crowdsale
@@ -75,15 +78,34 @@ def gen_predefined_test(out, ops):
     env = SolidityEnvironment()
     token = Token(INITIAL_SUPPLY, INITIAL_CROWDSALE_ALLOWANCE, INITIAL_ADMIN_ALLOWANCE)
     c = CrowdsaleFuzzer(RNG, env, token, USERS, *CROWDSALE_PARAMETERS)
-    
+
     ops = [
-        c.terminate(fail="onlyOwner"),
-        c.terminate(fail="onlyOwner"),
-        c.terminate(fail=None)
+        c.fallback(fail=None, parameters={"user": "user3", "wei": 0.2 * 10 ** 18}),
+        c.ownerAllocateTokens(None, parameters={"amount_wei": int(0.2 * 10 ** 18)}),
+        c.setRate(None),
+        c.checkTime(),
+        c.changeTime(0),
+        c.checkTime(),
+        c.fallback(fail=None, parameters={"user": "user3", "wei": 0.2 * 10 ** 18}),
+        c.terminate(fail=None),
+        c.fallback(fail=None, parameters={"user":"user3", "wei": 0.2 * 10**18}),
+        test_writer.gen_log("'Finished Test'")
     ]
+
+
+
+    """
+    ops = [
+        c.fallback(fail=None, parameters={"user": "user3", "wei": 0.2 * 10 ** 18}),
+        test_writer.gen_log("'Finished Test'")
+
+    ]
+    """
+
 
     out.write("it('should pass the fuzz test', async function(){\n")
     # TODO: clean this, need this line to initiate the crowdsale
+    #out.write("        let sale = await QuantstampSaleMock.new(beneficiary, 10, 20, 1, time, 2, 5000, token.address);\n")
     out.write("        await token.setCrowdsale(sale.address, 0);\n")
     count = 0
     for s in ops:
@@ -104,7 +126,7 @@ def main():
     out_file = SUB_TEST_DIR +"/fuzz_test." + str(RANDOM_SEED) + ".js"
     with open(out_file, 'w') as out:
         gen_header(out)
-        gen_test_contract_header(out, RANDOM_SEED)
+        gen_test_contract_header(out, CROWDSALE_CONTRACT_PARAMETERS, RANDOM_SEED)
         #gen_test(out, ops=2)
         gen_predefined_test(out, [])
         gen_test_contract_footer(out)
