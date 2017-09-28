@@ -12,4 +12,3 @@ class Token:
         self.admin_allowance = initial_admin_allowance
         self.balances = {}  # the amount of tokens owned by each address
         self.allowances = {}  # the amount of tokens that a sender can transfer from a different user's balance
-

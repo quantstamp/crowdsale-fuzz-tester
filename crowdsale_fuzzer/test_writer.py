@@ -1,6 +1,5 @@
-
 def wrap_exception(s, e):
-    ret =  "try{\n"
+    ret = "try{\n"
     ret += "    flag = false;\n"
     ret += "    " + s + "\n"
     ret += "}\n"
@@ -11,17 +10,20 @@ def wrap_exception(s, e):
     ret += "flag = false;\n"
     return ret
 
+
 def wrap_token_balance_checks(s, user, var_name):
-    ret =  "var " + var_name + "_before = await token.balanceOf(" + user + ")\n"
+    ret = "var " + var_name + "_before = await token.balanceOf(" + user + ")\n"
     ret += s
     ret += "var " + var_name + "_after = await token.balanceOf(" + user + ")\n"
     return ret
 
+
 def wrap_ether_balance_checks(s, addr, var_name):
-    ret =  "var " + var_name + "_before = await web3.eth.getBalance(" + addr + ")\n"
+    ret = "var " + var_name + "_before = await web3.eth.getBalance(" + addr + ")\n"
     ret += s
     ret += "var " + var_name + "_after = await web3.eth.getBalance(" + addr + ")\n"
     return ret
+
 
 def balance_assertion_check(vid, left_operation, error_message):
     l = vid + "_before"
@@ -29,23 +31,27 @@ def balance_assertion_check(vid, left_operation, error_message):
     l += left_operation
     return gen_assert_equal(l, r, error_message)
 
+
 def wrap_sale_balance_checks(s, user, var_name):
-    ret =  "var " + var_name + "_before = await sale.balanceOf(" + user + ")\n"
+    ret = "var " + var_name + "_before = await sale.balanceOf(" + user + ")\n"
     ret += s
     ret += "var " + var_name + "_after = await sale.balanceOf(" + user + ")\n"
     return ret
 
+
 def wrap_amount_raised(s, var_name):
-    ret =  "var " + var_name + "_before = await sale.amountRaised()\n"
+    ret = "var " + var_name + "_before = await sale.amountRaised()\n"
     ret += s
-    ret +=  "var " + var_name + "_after = await sale.amountRaised()\n"
+    ret += "var " + var_name + "_after = await sale.amountRaised()\n"
     return ret
 
+
 def wrap_allowance_checks(s, user, var_name):
-    ret =  "var " + var_name + "_before = await token.allowance(" + "token_owner" + ", " + user + ")\n"
+    ret = "var " + var_name + "_before = await token.allowance(" + "token_owner" + ", " + user + ")\n"
     ret += s
     ret += "var " + var_name + "_after = await token.allowance(" + "token_owner" + ", " + user + ")\n"
     return ret
+
 
 def goal_and_cap_assertion_checks(goal_reached, cap_reached):
     # assert that the goalReached field has changed if necessary
@@ -62,6 +68,7 @@ def goal_and_cap_assertion_checks(goal_reached, cap_reached):
     else:
         s += "assert(!cap_reached, 'the funding cap has not been reached and should be false');\n"
     return s
+
 
 def gen_header(out):
     header = """
@@ -141,23 +148,38 @@ def gen_test_contract_header(out, params, seed):
         });
 
 """
-#    return QuantstampSale.deployed().then(function(instance) {
-
     out.write(s)
+
+
+def gen_test_case_header(out):
+    out.write("it('should pass the fuzz test', async function(){\n")
+    out.write("        await token.setCrowdsale(sale.address, 0);\n")
+
 
 def check_value(var_name, expr):
     s = "var " + var_name + " = await " + expr + ";\n"
-    s += gen_log("'" + var_name + " = ' + " +  var_name)
+    s += gen_log("'" + var_name + " = ' + " + var_name)
     return s
+
 
 def gen_test_contract_footer(out):
     out.write("});\n")
 
+
+def gen_user_str(user, wei=None):
+    if not wei:
+        return "{from: " + user + "}"
+    else:
+        return "{from: " + user + ", value: " + str(wei) + "}"
+
+
 def gen_assert_equal(l, r, e):
-        return "assert(" + str(l) + ".equals(" + str(r) + "), '" + e +"');\n"
+    return "assert(" + str(l) + ".equals(" + str(r) + "), '" + e + "');\n"
+
 
 def gen_log(e):
     return "console.log(" + e + ");\n"
+
 
 def gen_big_int(n):
     return "new bigInt(" + str(n) + ")"

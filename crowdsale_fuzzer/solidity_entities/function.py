@@ -1,4 +1,3 @@
-
 class Function:
     def __init__(self, function, modifiers=None, extra_failure_vectors = None):
         self.function = function
