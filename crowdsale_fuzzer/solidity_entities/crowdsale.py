@@ -5,7 +5,7 @@ import sys
 from solidity_entities.environment import SolidityEnvironment
 from solidity_entities.function import Function
 from solidity_entities.token import Token
-from test_writer import wrap_exception, gen_assert_equal, gen_big_int, gen_log, to_number, \
+from test_writer import wrap_exception, gen_assert_equal, gen_big_int, gen_log, \
     wrap_token_balance_checks, wrap_sale_balance_checks, wrap_allowance_checks, balance_assertion_check, \
     goal_and_cap_assertion_checks, wrap_amount_raised, check_value, wrap_ether_balance_checks
 
@@ -109,7 +109,6 @@ class CrowdsaleFuzzer:
     def update_state_with_purchase(self, user, wei, mini_qsp):
         # update amount raised, the allowance of the crowdsale, and the balance of user in token and sale
         # if mini_qsp is None, then mini_qsp = wei * rate
-        wei = int(wei)
         if mini_qsp:
             mini_qsp = int(mini_qsp)
         else:
@@ -385,27 +384,12 @@ class CrowdsaleFuzzer:
             # assert that the contract ether balance is zero
             s = wrap_ether_balance_checks(s, "sale.address", "sale_ether")
             s = wrap_ether_balance_checks(s, "beneficiary", "beneficiary_ether")
-            s += gen_log("beneficiary_ether_before")
-            s += gen_log("beneficiary_ether_after")
-            s += gen_log("sale_ether_before")
-            s += gen_log("sale_ether_after")
-            s += gen_log("'Check:'")
-            s += "var test1 = await beneficiary_ether_before.plus(sale_ether_before);\n"
-            s += "var test2 = await beneficiary_ether_after.plus(22);\n"
-            #s += "var test1 = await test1;\n"
-            #s += "var test2 = await test2;\n"
-            s += gen_log("test1")
-            s += gen_log("test2")
-            s += gen_log("beneficiary_ether_before")
-            s += gen_log("beneficiary_ether_after")
 
-            s += gen_assert_equal("test1", "test2", "sale ether should be zero after ownerSafeWithdrawal")
             # assert that the beneficiary's ether balance is increased
             s += gen_assert_equal("beneficiary_ether_before.plus(sale_ether_before)",
-                                  "beneficiary_ether_after.plus(1)",
+                                  "beneficiary_ether_after",
                                   "the beneficiary should have gained the ether from the sale after ownerSafeWithdrawal")
             return s
-            sys.exit("TODO ownerSafeWithdrawal")
         else:
             sys.exit("Missing case in ownerSafeWithdrawal")
         return s
@@ -437,8 +421,10 @@ class CrowdsaleFuzzer:
         user = parameters["user"]
         user_str = gen_user_str(user)
         to_user = parameters["to_user"]
-        amount_mini_qsp = str(parameters["amount_mini_qsp"])
-        amount_wei = str(parameters["amount_wei"])
+        amount_mini_qsp = parameters["amount_mini_qsp"]
+        amount_mini_qsp_str = "'" + str(parameters["amount_mini_qsp"]) + "'"
+        amount_wei = parameters["amount_wei"]
+        amount_wei_str = "'" + str(parameters["amount_wei"]) + "'"
         # end parameter instantiation
 
         if self.VERBOSE:
@@ -448,23 +434,23 @@ class CrowdsaleFuzzer:
 
         if not fail:
             s += "await sale.ownerAllocateTokens(" + \
-                ", ".join([to_user, amount_wei, amount_mini_qsp, user_str]) + ");\n"
+                ", ".join([to_user, amount_wei_str, amount_mini_qsp_str, user_str]) + ");\n"
             # assert that token.balances[to_user] increases by amount_mini_qsp
             vid = "token_balance_" + to_user
             s = wrap_token_balance_checks(s, to_user, vid)
-            s += balance_assertion_check(vid, ".add(" + gen_big_int(amount_mini_qsp) + ")",
+            s += balance_assertion_check(vid, ".add(" + gen_big_int(amount_mini_qsp_str) + ")",
                                          "the token balance of the to_user should increase after ownerAllocateTokens")
 
             # assert that the sale.balanceOf[to_user] increases by amount_wei
             vid = "sale_balance_" + to_user
             s = wrap_sale_balance_checks(s, to_user, vid)
-            s += balance_assertion_check(vid, ".add(" + gen_big_int(amount_wei) + ")",
+            s += balance_assertion_check(vid, ".add(" + gen_big_int(amount_wei_str) + ")",
                                          "the sale balance of the to_user should increase after ownerAllocateTokens")
 
             # assert that the allowance of crowdsale decreases by amount_mini_qsp
             vid = "crowdsale_allowance"
             s = wrap_allowance_checks(s, "sale.address", vid)
-            s += balance_assertion_check(vid, ".minus(" + gen_big_int(amount_mini_qsp) + ")",
+            s += balance_assertion_check(vid, ".minus(" + gen_big_int(amount_mini_qsp_str) + ")",
                                          "the allowance of the crowdsale should decrease by amount_mini_qsp")
 
             # assert that the amountRaised field has increased
@@ -514,8 +500,9 @@ class CrowdsaleFuzzer:
         else:
             parameters["wei"] = parameters.get("wei", self.RNG.randint(int(0.1 * ETHER), ETHER))
 
-        user = parameters["user"]
         wei = parameters["wei"]
+        wei_str = "'" + str(parameters["wei"]) + "'"
+        user = str(parameters["user"])
         user_str = gen_user_str(user, wei)
         # end parameter instantiation
 
@@ -535,25 +522,25 @@ class CrowdsaleFuzzer:
             # assert that the balance of the user in token is increased (qsp = wei * rate)
             vid = "token_balance_" + user
             s = wrap_token_balance_checks(s, user, vid)
-            s += balance_assertion_check(vid, ".add(" + gen_big_int(wei * self.rate) + ")",
+            s += balance_assertion_check(vid, ".add(" + gen_big_int("'" + str(wei * self.rate) + "'") + ")",
                                          "the token balance of the user should increase after contributing")
 
             # assert that the balance of the user in sale is increased (wei)
             vid = "sale_balance_" + user
             s = wrap_sale_balance_checks(s, user, vid)
-            s += balance_assertion_check(vid, ".add(" + gen_big_int(wei) + ")",
+            s += balance_assertion_check(vid, ".add(" + gen_big_int(wei_str) + ")",
                                          "the sale balance of the user should increase after contributing")
 
             # assert that the amountRaised field has increased
             vid = "amount_raised"
             s = wrap_amount_raised(s, vid)
-            s += balance_assertion_check(vid, ".add(" + gen_big_int(wei) + ")",
+            s += balance_assertion_check(vid, ".add(" + gen_big_int(wei_str) + ")",
                                          "the amountRaised of the crowdsale should increase by wei")
 
             # assert that the allowance of the crowdsale has decreased
             vid = "crowdsale_allowance"
             s = wrap_allowance_checks(s, "sale.address", vid)
-            s += balance_assertion_check(vid, ".minus(" + gen_big_int(wei * self.rate) + ")",
+            s += balance_assertion_check(vid, ".minus(" + gen_big_int("'" + str(wei * self.rate) + "'") + ")",
                                          "the allowance of the crowdsale should decrease by wei * rate")
 
             # update the state of crowdsale

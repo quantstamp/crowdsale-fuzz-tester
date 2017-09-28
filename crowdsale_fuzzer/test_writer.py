@@ -27,7 +27,7 @@ def balance_assertion_check(vid, left_operation, error_message):
     l = vid + "_before"
     r = vid + "_after"
     l += left_operation
-    return gen_assert_equal(to_number(l), to_number(r), error_message)
+    return gen_assert_equal(l, r, error_message)
 
 def wrap_sale_balance_checks(s, user, var_name):
     ret =  "var " + var_name + "_before = await sale.balanceOf(" + user + ")\n"
@@ -76,10 +76,10 @@ async function logUserBalances (token, accounts) {
     console.log("");
     console.log("User Balances:");
     console.log("--------------");
-    console.log(`Owner: ${(await token.balanceOf(accounts[0])).toNumber()}`);
-    console.log(`User1: ${(await token.balanceOf(accounts[1])).toNumber()}`);
-    console.log(`User2: ${(await token.balanceOf(accounts[2])).toNumber()}`);
-    console.log(`User3: ${(await token.balanceOf(accounts[3])).toNumber()}`);
+    console.log(`Owner: ${(await token.balanceOf(accounts[0]))}`);
+    console.log(`User1: ${(await token.balanceOf(accounts[1]))}`);
+    console.log(`User2: ${(await token.balanceOf(accounts[2]))}`);
+    console.log(`User3: ${(await token.balanceOf(accounts[3]))}`);
 
     console.log("--------------");
     console.log("");
@@ -89,12 +89,12 @@ async function logEthBalances (token, sale, accounts) {
     console.log("");
     console.log("Eth Balances:");
     console.log("-------------");
-    console.log(`Owner: ${(await web3.eth.getBalance(accounts[0])).toNumber()}`);
-    console.log(`User1: ${(await web3.eth.getBalance(accounts[1])).toNumber()}`);
-    console.log(`User2: ${(await web3.eth.getBalance(accounts[2])).toNumber()}`);
-    console.log(`User3: ${(await web3.eth.getBalance(accounts[3])).toNumber()}`);
-    console.log(`Sale : ${(await web3.eth.getBalance(sale.address)).toNumber()}`);
-    console.log(`Token: ${(await web3.eth.getBalance(token.address)).toNumber()}`);
+    console.log(`Owner: ${(await web3.eth.getBalance(accounts[0]))}`);
+    console.log(`User1: ${(await web3.eth.getBalance(accounts[1]))}`);
+    console.log(`User2: ${(await web3.eth.getBalance(accounts[2]))}`);
+    console.log(`User3: ${(await web3.eth.getBalance(accounts[3]))}`);
+    console.log(`Sale : ${(await web3.eth.getBalance(sale.address))}`);
+    console.log(`Token: ${(await web3.eth.getBalance(token.address))}`);
 
     console.log("--------------");
     console.log("");
@@ -130,10 +130,10 @@ def gen_test_contract_header(out, params, seed):
             sale = instance2;
             return token.INITIAL_SUPPLY();
         }).then(function(val){
-            initialSupply = val.toNumber();
+            initialSupply = val;
             return sale.rate();
         }).then(function(val){
-            rate = val.toNumber();
+            rate = val;
             return token_owner = token.owner()
         }).then(function(val){
             token_owner = val
@@ -145,22 +145,19 @@ def gen_test_contract_header(out, params, seed):
 
     out.write(s)
 
-def check_value(var_name, expr, convert_to_number=False):
+def check_value(var_name, expr):
     s = "var " + var_name + " = await " + expr + ";\n"
-    s += gen_log("'" + var_name + " = ' + " + (to_number(var_name) if convert_to_number else var_name))
+    s += gen_log("'" + var_name + " = ' + " +  var_name)
     return s
 
 def gen_test_contract_footer(out):
     out.write("});\n")
 
 def gen_assert_equal(l, r, e):
-    return "assert.equal(" + str(l) + ", " + str(r) + ", '" + e +"');\n"
+        return "assert(" + str(l) + ".equals(" + str(r) + "), '" + e +"');\n"
 
 def gen_log(e):
     return "console.log(" + e + ");\n"
-
-def to_number(e):
-    return e + ".toNumber()"
 
 def gen_big_int(n):
     return "new bigInt(" + str(n) + ")"

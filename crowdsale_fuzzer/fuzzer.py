@@ -80,7 +80,7 @@ def gen_predefined_test(out, ops):
     token = Token(INITIAL_SUPPLY, INITIAL_CROWDSALE_ALLOWANCE, INITIAL_ADMIN_ALLOWANCE)
     c = CrowdsaleFuzzer(RNG, env, token, USERS, *CROWDSALE_PARAMETERS, VERBOSE)
 
-    """
+
     ops = [
         c.fallback(fail=None, parameters={"user": "user3", "wei": 0.2 * 10 ** 18}),
         c.ownerAllocateTokens(None, parameters={"amount_wei": int(0.2 * 10 ** 18)}),
@@ -113,13 +113,14 @@ def gen_predefined_test(out, ops):
         c.ownerSafeWithdrawal(),
         c.checkTime(),
         test_writer.gen_log("'Changing to rogue crowdsale that has not been given allowance by the token'"),
-        c.create_new_crowdsale(CROWDSALE_CONTRACT_PARAMETERS, set_crowdsale=False),
+        c.create_new_crowdsale(CROWDSALE_CONTRACT_PARAMETERS, set_crowdsale=True),
         c.check_sale_state(),
         c.fallback(fail=None, parameters={"user": "user3", "wei": 0.2 * 10 ** 18}),
         # after sale
         c.changeTime(c.endTime + 1),
         c.checkTime()
     ]
+    """
 
 
     out.write("it('should pass the fuzz test', async function(){\n")
