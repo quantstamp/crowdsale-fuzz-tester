@@ -7,7 +7,7 @@ from solidity_entities.function import Function
 from solidity_entities.token import Token
 from test_writer import wrap_exception, gen_assert_equal, gen_big_int, gen_log, to_number, \
     wrap_token_balance_checks, wrap_sale_balance_checks, wrap_allowance_checks, balance_assertion_check, \
-    goal_and_cap_assertion_checks, wrap_amount_raised
+    goal_and_cap_assertion_checks, wrap_amount_raised, check_value, wrap_ether_balance_checks
 
 ETHER = 10 ** 18
 CROWDSALE_CAP = 100000 * ETHER
@@ -37,11 +37,13 @@ class CrowdsaleFuzzer:
                  minimumContributionInWei,
                  start,
                  durationInMinutes,
-                 rateQspToEther):
+                 rateQspToEther,
+                 VERBOSE):
         self.RNG = RNG
         self.env = solidity_environment
         self.env.current_time = start
         self.token = token
+        self.VERBOSE = VERBOSE
 
         assert isinstance(self.RNG, random.Random)
         assert isinstance(self.env, SolidityEnvironment)
@@ -74,6 +76,35 @@ class CrowdsaleFuzzer:
         self.cap_reached = (self.amountRaised >= self.fundingCap)
         self.functions = self.gen_functions()
 
+    def update_state_for_new_contract(self, beneficiary, fundingGoalInEthers, fundingCapInEthers,
+                                      minimumContributionInWei, start, durationInMinutes, rateQspToEther):
+        self.beneficiary = beneficiary
+
+        self.fundingGoal = fundingGoalInEthers * ETHER
+        self.fundingCap = fundingCapInEthers * ETHER
+        self.minContribution = minimumContributionInWei
+        self.startTime = start
+        self.endTime = start + durationInMinutes * 60
+        self.rate = rateQspToEther
+
+        # other state variables
+        self.saleClosed = False
+        self.paused = False
+        self.amountRaised = 0
+        self.refundAmount = 0
+        self.balanceOf = {}  # how much each donor has contributed to the crowdsale
+        self.goal_reached = (self.amountRaised >= self.fundingGoal)
+        self.cap_reached = (self.amountRaised >= self.fundingCap)
+        self.functions = self.gen_functions()
+
+
+    def create_new_crowdsale(self, params, set_crowdsale=True):
+        self.update_state_for_new_contract(*params)
+        params = ", ".join([str(i) for i in params])
+        s = "sale = await QuantstampSaleMock.new(" + params + ", token_address);\n"
+        if set_crowdsale:
+            s += "await token.setCrowdsale(sale.address, 0);\n"
+        return s
 
     def update_state_with_purchase(self, user, wei, mini_qsp):
         # update amount raised, the allowance of the crowdsale, and the balance of user in token and sale
@@ -88,6 +119,7 @@ class CrowdsaleFuzzer:
         self.token.balances[user] = self.token.balances.get(user, 0) + mini_qsp
         self.balanceOf[user] = self.balanceOf.get(user, 0) + wei
         # update goal and cap if exceeded
+
         if self.amountRaised > self.fundingGoal:
             self.goal_reached = True
         if self.amountRaised > self.fundingCap:
@@ -112,9 +144,32 @@ class CrowdsaleFuzzer:
         self.env.current_time = time
         return s
 
+
     def checkTime(self):
         s = "var currTime = await sale._now();\n"
-        s += gen_log("'Time: ' + currTime.toNumber()")
+        s += gen_log("'Time: ' + currTime")
+        return s
+
+    def check_sale_state(self):
+        s = gen_log("'================'")
+        s += gen_log("'Crowdsale State:'")
+        s += gen_log("")
+        s += check_value("amountRaised", "sale.amountRaised()")
+        s += check_value("refundAmount", "sale.refundAmount()")
+        s += check_value("paused", "sale.paused()")
+        s += check_value("saleClosed", "sale.saleClosed()")
+        s += check_value("fundingGoalReached", "sale.fundingGoalReached()")
+        s += check_value("fundingCapReached", "sale.fundingCapReached()")
+        s += check_value("rate", "sale.rate()")
+        s += check_value("startTime", "sale.startTime()")
+        s += check_value("currentTime", "sale.currentTime()")
+        s += check_value("endTime", "sale.endTime()")
+        s += check_value("crowdsaleOngoing", "(startTime <= currentTime && currentTime <= endTime)")
+
+
+        s += gen_log("'----------------'")
+
+
         return s
 
     def onlyOwner(self, function_name, error_message, parameters):
@@ -130,9 +185,63 @@ class CrowdsaleFuzzer:
         s = wrap_exception(s, error_message)
         return s
 
-    def terminate(self, fail, parameters=None):
-        # can only fail if run as a non-owner
-        # instantiate parameters locally
+    # -------------------------------------------------------------------------------------------------------
+    # Crowdsale Functions
+    # -------------------------------------------------------------------------------------------------------
+
+    def set_pause(self, fail=None, parameters=None):
+        """
+        :param fail: onlyOwner
+        :param parameters: user, pause
+        """
+        if not parameters:
+            parameters = {}
+        if fail:
+            parameters["user"] = parameters.get("user", self.RNG.choice(self.non_owner_users))
+        else:
+            parameters["user"] = parameters.get("user", "owner")
+        parameters["pause"] = parameters.get("pause", self.RNG.choice([True, False]))
+
+        user = parameters["user"]
+        user_str = gen_user_str(user)
+        pause = parameters["pause"]
+        # end parameter instantiation
+
+        if self.VERBOSE:
+            s = gen_log("'About to call pause with parameters: " + str(parameters).replace("'", "") + "'")
+        else:
+            s = ""
+
+        if pause:
+            s += "await sale.pause(" + user_str + ");\n"
+            self.paused = True
+        else:
+            s += "await sale.unpause(" + user_str + ");\n"
+            self.paused = False
+
+        if not fail:
+            if pause:
+                s += "await sale.pause(" + user_str + ");\n"
+                s += "var is_paused = await sale.paused();\n"
+                s += "assert(is_paused, 'sale should be paused after owner pauses it');"
+                self.paused = True
+            else:
+                s += "await sale.unpause(" + user_str + ");\n"
+                s += "var is_paused = await sale.paused();\n"
+                s += "assert(!is_paused, 'sale should be unpaused after owner unpauses it');"
+                self.paused = False
+        else:
+            if pause:
+                s += self.onlyOwner("sale.pause", "only the owner can pause the crowd sale", parameters)
+            else:
+                s += self.onlyOwner("sale.unpause", "only the owner can unpause the crowd sale", parameters)
+        return s;
+
+    def terminate(self, fail=None, parameters=None):
+        """
+        :param fail: onlyOwner
+        :param parameters: user
+        """
         if not parameters:
             parameters = {}
         if fail:
@@ -143,20 +252,27 @@ class CrowdsaleFuzzer:
         user = parameters["user"]
         # end parameter instantiation
 
+        if self.VERBOSE:
+            s = gen_log("'About to call terminate with parameters: " + str(parameters).replace("'", "") + "'")
+        else:
+            s = ""
+
         if not fail:
             # run as the owner
             user_str = gen_user_str(user)
-            s = "await sale.terminate(" + user_str + ");\n"
+            s += "await sale.terminate(" + user_str + ");\n"
             s += "var closed = await sale.saleClosed();\n"
             s += "assert(closed, 'sale should be closed after owner terminates it');"
             self.saleClosed = True
         else:
-            s = self.onlyOwner("sale.terminate", "only the owner can terminate the crowd sale", parameters)
+            s += self.onlyOwner("sale.terminate", "only the owner can terminate the crowd sale", parameters)
         return s;
 
-    def ownerUnlockFund(self, fail, parameters=None):
-        # can only fail if run as a non-owner, or before deadline
-        # instantiate parameters locally
+    def ownerUnlockFund(self, fail=None, parameters=None):
+        """
+        :param fail: onlyOwner, afterDeadline
+        :param parameters: user
+        """
         if not parameters:
             parameters = {}
         if fail == "onlyOwner":
@@ -173,15 +289,20 @@ class CrowdsaleFuzzer:
         user = parameters["user"]
         # end parameter instantiation
 
+        if self.VERBOSE:
+            s = gen_log("'About to call ownerUnlockFund with parameters: " + str(parameters).replace("'", "") + "'")
+        else:
+            s = ""
+
         if not fail:
             # run as the owner
             user_str = gen_user_str(user)
-            s = "await sale.ownerUnlockFund(" + user_str + ");\n"
+            s += "await sale.ownerUnlockFund(" + user_str + ");\n"
             s += "var goal_reached = await sale.fundingGoalReached();\n"
             s += "assert(goal_reached, 'fundingGoalReached should be false after calling, allowing users to withdraw');"
             self.saleClosed = True
         elif fail == "onlyOwner":
-            s = self.onlyOwner("sale.ownerUnlockFund",
+            s += self.onlyOwner("sale.ownerUnlockFund",
                                     "only the owner can unlock funds from the crowd sale",
                                parameters)
         elif fail == "afterDeadline":
@@ -190,8 +311,11 @@ class CrowdsaleFuzzer:
         return s;
 
 
-    def setRate(self, fail, parameters=None):
-        # instantiate parameters locally
+    def setRate(self, fail=None, parameters=None):
+        """
+        :param fail: onlyOwner, rateAbove, rateBelow
+        :param parameters: user, rate
+        """
         if not parameters:
             parameters = {}
         if fail == "onlyOwner":
@@ -210,26 +334,87 @@ class CrowdsaleFuzzer:
         user_str = gen_user_str(user)
         # end parameter instantiation
 
+        if self.VERBOSE:
+            s = gen_log("'About to call setRate with parameters: " + str(parameters).replace("'", "") + "'")
+        else:
+            s = ""
+
         if not fail:
             # run as the owner
-            s = "await sale.setRate(" + str(rate) + ", " + user_str + ");\n"
+            s += "await sale.setRate(" + str(rate) + ", " + user_str + ");\n"
             s += "var currentRate = await sale.rate();\n"
             s += gen_assert_equal("currentRate", rate, "the rate should be set to the new value")
             self.rate = rate
         elif fail == "onlyOwner":
-            s = self.onlyOwner("sale.setRate", "only the owner can set the rate")
+            s += self.onlyOwner("sale.setRate", "only the owner can set the rate")
         elif fail == "rateAbove" or fail == "rateBelow":
-            s = "await sale.setRate(" + str(rate) + ", " + user_str + ");\n"
+            s += "await sale.setRate(" + str(rate) + ", " + user_str + ");\n"
             s = wrap_exception(s, "the new rate must be within the bounds")
         if fail:
             s += "var currentRate = await sale.rate();\n"
             s += gen_assert_equal("currentRate", self.rate, "the rate should not have changed")
         return s;
 
-    def ownerAllocateTokens(self, fail, parameters=None):
-        # TODO: refactor
-        # TODO: fresh var generator
-        # instantiate parameters locally
+    def ownerSafeWithdrawal(self, fail=None, parameters=None):
+        """
+        :param fail: onlyOwner
+        :param parameters: user
+        """
+        if not parameters:
+            parameters = {}
+        if fail == "onlyOwner":
+            parameters["user"] = parameters.get("user", self.RNG.choice(self.non_owner_users))
+        else:
+            parameters["user"] = parameters.get("user", "owner")
+
+        user = parameters["user"]
+        user_str = gen_user_str(user)
+        # end parameter instantiation
+        if self.VERBOSE:
+            s = gen_log("'About to call ownerSafeWithdrawal with parameters: " + str(parameters).replace("'", "") + "'")
+        else:
+            s = ""
+
+        if fail == "onlyOwner":
+            s += self.onlyOwner("sale.ownerSafeWithdrawal", "only the owner can can ownerSafeWithdrawal", parameters)
+        elif not self.goal_reached:
+            s += "await sale.ownerSafeWithdrawal(" + user_str + ");\n"
+            s = wrap_exception(s, "cannot call ownerSafeWithdrawal before the goal is reached")
+        elif not fail:
+            s += "await sale.ownerSafeWithdrawal(" + user_str + ");\n"
+            # assert that the contract ether balance is zero
+            s = wrap_ether_balance_checks(s, "sale.address", "sale_ether")
+            s = wrap_ether_balance_checks(s, "beneficiary", "beneficiary_ether")
+            s += gen_log("beneficiary_ether_before")
+            s += gen_log("beneficiary_ether_after")
+            s += gen_log("sale_ether_before")
+            s += gen_log("sale_ether_after")
+            s += gen_log("'Check:'")
+            s += "var test1 = await beneficiary_ether_before.plus(sale_ether_before);\n"
+            s += "var test2 = await beneficiary_ether_after.plus(22);\n"
+            #s += "var test1 = await test1;\n"
+            #s += "var test2 = await test2;\n"
+            s += gen_log("test1")
+            s += gen_log("test2")
+            s += gen_log("beneficiary_ether_before")
+            s += gen_log("beneficiary_ether_after")
+
+            s += gen_assert_equal("test1", "test2", "sale ether should be zero after ownerSafeWithdrawal")
+            # assert that the beneficiary's ether balance is increased
+            s += gen_assert_equal("beneficiary_ether_before.plus(sale_ether_before)",
+                                  "beneficiary_ether_after.plus(1)",
+                                  "the beneficiary should have gained the ether from the sale after ownerSafeWithdrawal")
+            return s
+            sys.exit("TODO ownerSafeWithdrawal")
+        else:
+            sys.exit("Missing case in ownerSafeWithdrawal")
+        return s
+
+    def ownerAllocateTokens(self, fail=None, parameters=None):
+        """
+        :param fail: belowMinContribution, validDestination
+        :param parameters: user, wei
+        """
         if not parameters:
             parameters = {}
         if fail == "onlyOwner":
@@ -256,8 +441,13 @@ class CrowdsaleFuzzer:
         amount_wei = str(parameters["amount_wei"])
         # end parameter instantiation
 
+        if self.VERBOSE:
+            s = gen_log("'About to call ownerAllocateTokens with parameters: " + str(parameters).replace("'", "") + "'")
+        else:
+            s = ""
+
         if not fail:
-            s = "await sale.ownerAllocateTokens(" + \
+            s += "await sale.ownerAllocateTokens(" + \
                 ", ".join([to_user, amount_wei, amount_mini_qsp, user_str]) + ");\n"
             # assert that token.balances[to_user] increases by amount_mini_qsp
             vid = "token_balance_" + to_user
@@ -289,17 +479,16 @@ class CrowdsaleFuzzer:
             # assert that the goalReached and capReached fields have changed if necessary
             s += goal_and_cap_assertion_checks(self.goal_reached, self.cap_reached)
 
-
         elif fail == "onlyOwner":
-            s = self.onlyOwner("sale.ownerAllocateTokens",
+            s += self.onlyOwner("sale.ownerAllocateTokens",
                                     "only the owner can call ownerAllocateTokens",
                                parameters)
         elif fail == "validDestination":
-            s = "await sale.ownerAllocateTokens(" + \
+            s += "await sale.ownerAllocateTokens(" + \
                 ", ".join([to_user, amount_wei, amount_mini_qsp, user_str]) + ");\n"
             s = wrap_exception(s, "the to-address is not valid for allocating tokens")
         elif fail == "exceedAllowance":
-            s = "await sale.ownerAllocateTokens(" + \
+            s += "await sale.ownerAllocateTokens(" + \
                 ", ".join([to_user, amount_wei, amount_mini_qsp, user_str]) + ");\n"
             s = wrap_exception(s, "the amount of mini-QSP exceeds the crowdsale's allowance")
         if fail:
@@ -309,9 +498,11 @@ class CrowdsaleFuzzer:
                                   "the crowdsale allowance should not have changed")
         return s;
 
-    def fallback(self, fail, parameters=None):
-        # PARAMETERS: user, wei
-        # fail: belowMinContribution, validDestination
+    def fallback(self, fail=None, parameters=None):
+        """
+        :param fail: user, wei
+        :param parameters: belowMinContribution, validDestination
+        """
         if not parameters:
             parameters = {}
         if fail == "validDestination":
@@ -328,7 +519,12 @@ class CrowdsaleFuzzer:
         user_str = gen_user_str(user, wei)
         # end parameter instantiation
 
-        s = "await sale.sendTransaction(" + user_str + ");\n"
+        if self.VERBOSE:
+            s = gen_log("'About to call fallback with parameters: " + str(parameters).replace("'", "") + "'")
+        else:
+            s = ""
+
+        s += "await sale.sendTransaction(" + user_str + ");\n"
 
         payable_disallowed = (self.cap_reached
               or self.saleClosed

@@ -17,12 +17,17 @@ def wrap_token_balance_checks(s, user, var_name):
     ret += "var " + var_name + "_after = await token.balanceOf(" + user + ")\n"
     return ret
 
+def wrap_ether_balance_checks(s, addr, var_name):
+    ret =  "var " + var_name + "_before = await web3.eth.getBalance(" + addr + ")\n"
+    ret += s
+    ret += "var " + var_name + "_after = await web3.eth.getBalance(" + addr + ")\n"
+    return ret
+
 def balance_assertion_check(vid, left_operation, error_message):
     l = vid + "_before"
     r = vid + "_after"
     l += left_operation
     return gen_assert_equal(to_number(l), to_number(r), error_message)
-
 
 def wrap_sale_balance_checks(s, user, var_name):
     ret =  "var " + var_name + "_before = await sale.balanceOf(" + user + ")\n"
@@ -35,7 +40,6 @@ def wrap_amount_raised(s, var_name):
     ret += s
     ret +=  "var " + var_name + "_after = await sale.amountRaised()\n"
     return ret
-
 
 def wrap_allowance_checks(s, user, var_name):
     ret =  "var " + var_name + "_before = await token.allowance(" + "token_owner" + ", " + user + ")\n"
@@ -65,7 +69,8 @@ var QuantstampSale = artifacts.require("./QuantstampSale.sol");
 var QuantstampToken = artifacts.require("./QuantstampToken.sol");
 var QuantstampSaleMock = artifacts.require('./helpers/QuantstampSaleMock.sol');
 
-var bigInt = require("big-integer");
+// var bigInt = require("big-integer");
+var bigInt = require('bignumber.js');
 
 async function logUserBalances (token, accounts) {
     console.log("");
@@ -140,6 +145,11 @@ def gen_test_contract_header(out, params, seed):
 
     out.write(s)
 
+def check_value(var_name, expr, convert_to_number=False):
+    s = "var " + var_name + " = await " + expr + ";\n"
+    s += gen_log("'" + var_name + " = ' + " + (to_number(var_name) if convert_to_number else var_name))
+    return s
+
 def gen_test_contract_footer(out):
     out.write("});\n")
 
@@ -153,4 +163,4 @@ def to_number(e):
     return e + ".toNumber()"
 
 def gen_big_int(n):
-    return "bigInt(" + str(n) + ")"
+    return "new bigInt(" + str(n) + ")"

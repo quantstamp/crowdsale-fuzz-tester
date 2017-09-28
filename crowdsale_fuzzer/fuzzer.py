@@ -14,6 +14,7 @@ from test_writer import gen_header, gen_test_contract_header, gen_test_contract_
 
 
 # ==================== Change these parameters as needed. =============================
+VERBOSE=True
 
 START_TIME = 1323244
 DURATION_IN_MINUTES = 2
@@ -77,8 +78,9 @@ def gen_test(out, ops=2):
 def gen_predefined_test(out, ops):
     env = SolidityEnvironment()
     token = Token(INITIAL_SUPPLY, INITIAL_CROWDSALE_ALLOWANCE, INITIAL_ADMIN_ALLOWANCE)
-    c = CrowdsaleFuzzer(RNG, env, token, USERS, *CROWDSALE_PARAMETERS)
+    c = CrowdsaleFuzzer(RNG, env, token, USERS, *CROWDSALE_PARAMETERS, VERBOSE)
 
+    """
     ops = [
         c.fallback(fail=None, parameters={"user": "user3", "wei": 0.2 * 10 ** 18}),
         c.ownerAllocateTokens(None, parameters={"amount_wei": int(0.2 * 10 ** 18)}),
@@ -89,23 +91,39 @@ def gen_predefined_test(out, ops):
         c.fallback(fail=None, parameters={"user": "user3", "wei": 0.2 * 10 ** 18}),
         c.terminate(fail=None),
         c.fallback(fail=None, parameters={"user":"user3", "wei": 0.2 * 10**18}),
+        test_writer.gen_log("'before new crowdsale'"),
+        test_writer.check_value("old_contract_amount_raised", "sale.amountRaised()"),
+
+        c.create_new_crowdsale(CROWDSALE_CONTRACT_PARAMETERS),
+        test_writer.check_value("new_contract_amount_raised", "sale.amountRaised()"),
         test_writer.gen_log("'Finished Test'")
     ]
-
-
-
     """
+
     ops = [
+        # before sale
+        c.changeTime(0),
+        c.checkTime(),
+        c.check_sale_state(),
         c.fallback(fail=None, parameters={"user": "user3", "wei": 0.2 * 10 ** 18}),
-        test_writer.gen_log("'Finished Test'")
 
+        # during sale
+        c.changeTime(c.startTime),
+        c.fallback(fail=None, parameters={"user": "user3", "wei": 11 * 10 ** 18}),
+        c.ownerSafeWithdrawal(),
+        c.checkTime(),
+        test_writer.gen_log("'Changing to rogue crowdsale that has not been given allowance by the token'"),
+        c.create_new_crowdsale(CROWDSALE_CONTRACT_PARAMETERS, set_crowdsale=False),
+        c.check_sale_state(),
+        c.fallback(fail=None, parameters={"user": "user3", "wei": 0.2 * 10 ** 18}),
+        # after sale
+        c.changeTime(c.endTime + 1),
+        c.checkTime()
     ]
-    """
 
 
     out.write("it('should pass the fuzz test', async function(){\n")
     # TODO: clean this, need this line to initiate the crowdsale
-    #out.write("        let sale = await QuantstampSaleMock.new(beneficiary, 10, 20, 1, time, 2, 5000, token.address);\n")
     out.write("        await token.setCrowdsale(sale.address, 0);\n")
     count = 0
     for s in ops:
