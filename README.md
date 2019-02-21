@@ -2,4 +2,5 @@
 
 Utility built on top of truffle to aid in testing the Quantstamp crowdsale solidity contracts.
 
-Copyright 2017 Quantstamp Technologies Inc. All Rights Reserved.
+©2017 Quantstamp, Inc.  All rights reserved. 
+DISCLAIMER:  This content is provided for informational, personal, non-commercial purposes on an as-is, where-is, and as-available basis. You agree that your access and/or use, including but not limited to any associated services, products, protocols, platforms, content, and materials, will be at your sole risk. Cryptographic tokens are emergent technologies and carry with them high levels of technical risk and uncertainty. The Solidity language itself and other smart contract languages remain under development and are subject to unknown risks and flaws. You may risk loss of tokens, Ether, and/or other loss. This content may be subject to continuing update, modification, cancellation, delay, external dependencies, evolving regulatory frameworks, and/or factors beyond our control and you are cautioned not to place undue reliance on this information. FOR AVOIDANCE OF DOUBT, THIS CONTENT, INCLUDING ANY ASSOCIATED SERVICES OR MATERIALS, SHALL NOT BE CONSIDERED OR RELIED UPON AS ANY FORM OF FINANCIAL, INVESTMENT, TAX, LEGAL, REGULATORY, OR OTHER ADVICE.
